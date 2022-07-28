@@ -8,17 +8,59 @@ import envi
 import vivisect
 
 import envi.archs.ppc.const as _eapc
+
+
+__all__ = [
+    'OPCODE',
+    'CAT',
+    'IFLAGS',
+    'TGT_TYPE',
+    'dump',
+    'vwopen',
+    'decode',
+    'get_op_targets',
+]
+
+
 OPCODE = enum.IntEnum('OPCODE', dict((a, getattr(_eapc, a)) for a in dir(_eapc) if a.startswith('INS_')))
 CAT = enum.IntEnum('CAT', dict((a, getattr(_eapc, a)) for a in dir(_eapc) if a.startswith('CAT_')))
 
-flag_attrs = [('ARCH_PPC', envi.ARCH_PPC_E32)]
-flag_attrs += [(a, getattr(_eapc, a)) for a in dir(_eapc) if a.startswith('IF_')]
-flag_attrs += [(a, getattr(envi, a)) for a in dir(envi) if a.startswith('IF_')]
+flag_attrs = [('ARCH_PPC', envi.ARCH_PPC_E32)] + \
+        [(a, getattr(_eapc, a)) for a in dir(_eapc) if a.startswith('IF_')] + \
+        [(a, getattr(envi, a)) for a in dir(envi) if a.startswith('IF_')]
 IFLAGS = enum.IntFlag('IFLAGS', dict(flag_attrs))
+
+
+class TGT_TYPE(enum.Enum):
+    FALL    = enum.auto()   # This target is the next instruction
+    BRANCH  = enum.auto()   # This target is a branch to a different loction
+    RET     = enum.auto()   # This target is a branch to the LR (return)
+    CALL    = enum.auto()   # This target is a function call
 
 
 def print_flag_names(value):
     return '|'.join(v.name for v in list(value.__class__) if int(value)&int(v))
+
+
+def get_op_targets(op):
+    if op is None:
+        return None
+
+    targets = {}
+    for bva, bflags in op.getBranches():
+        if bflags & envi.BR_PROC:
+            # This is unconditional branch or call
+            if bflags & envi.BR_PROC:
+                targets[TGT_TYPE.CALL] = bva
+            elif bflags & envi.BR_FALL:
+                targets[TGT_TYPE.FALL] = bva
+            elif bva is None:
+                # Return out of this function.  Indicates end of block
+                targets[TGT_TYPE.RET] = bva
+            else:
+                # Should be a normal branch
+                targets[TGT_TYPE.BRANCH] = bva
+    return targets
 
 
 def dump(op, cat):
@@ -60,15 +102,16 @@ def arg2bytes(arg, is_vle=False):
     return data
 
 
-def decode(emu, arg, is_vle=False, prefix='', va=0):
+def decode(emu, arg, is_vle=False, prefix='', offset=0, va=0, verbose=True):
     data = arg2bytes(arg, is_vle)
 
     if is_vle:
-        op = emu._arch_vle_dis.disasm(data, offset=0, va=va)
+        op = emu._arch_vle_dis.disasm(data, offset=offset, va=va)
     else:
-        op = emu.archParseOpcode(data, offset=0, va=va)
+        op = emu.archParseOpcode(data, offset=offset, va=va)
 
-    print('%s%s:  %s' % (prefix, data.hex(), op))
+    if verbose:
+        print('%s%s:  %s' % (prefix, data[offset:offset+op.size].hex(), op))
     return op
 
 
@@ -121,7 +164,7 @@ def main():
     parser.add_argument('-v', '--vle', action='store_true', help='Decode instructions as VLE')
     parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=ppc_arch_list)
     parser.add_argument('-q', '--quiet', action='store_true', help='supress all extra decode information')
-    parser.add_argument('-b', '--baseaddr', type=int, default=0)
+    parser.add_argument('-b', '--baseaddr', type=str, default='0x00000000')
     args = parser.parse_args()
 
     va = int(args.baseaddr, 0)
