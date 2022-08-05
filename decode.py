@@ -29,7 +29,7 @@ flag_attrs = [('ARCH_PPC', envi.ARCH_PPC_E32)] + \
         [(a, getattr(_eapc, a)) for a in dir(_eapc) if a.startswith('IF_')] + \
         [(a, getattr(envi, a)) for a in dir(envi) if a.startswith('IF_')]
 IFLAGS = enum.IntFlag('IFLAGS', dict(flag_attrs))
-
+BRFLAGS = enum.IntFlag('BRFLAGS', dict((a, getattr(envi, a)) for a in dir(envi) if a.startswith('BR_')))
 
 class TGT_TYPE(enum.Enum):
     FALL    = enum.auto()   # This target is the next instruction
@@ -48,18 +48,18 @@ def get_op_targets(op):
 
     targets = {}
     for bva, bflags in op.getBranches():
-        if bflags & envi.BR_PROC:
-            # This is unconditional branch or call
-            if bflags & envi.BR_PROC:
-                targets[TGT_TYPE.CALL] = bva
-            elif bflags & envi.BR_FALL:
-                targets[TGT_TYPE.FALL] = bva
-            elif bva is None:
-                # Return out of this function.  Indicates end of block
-                targets[TGT_TYPE.RET] = bva
-            else:
-                # Should be a normal branch
-                targets[TGT_TYPE.BRANCH] = bva
+        flags = BRFLAGS(bflags)
+        # This is unconditional branch or call
+        if flags & BRFLAGS.BR_PROC:
+            targets[TGT_TYPE.CALL] = bva
+        elif flags & BRFLAGS.BR_FALL:
+            targets[TGT_TYPE.FALL] = bva
+        elif bva is None:
+            # Return out of this function.  Indicates end of block
+            targets[TGT_TYPE.RET] = bva
+        else:
+            # Should be a normal branch
+            targets[TGT_TYPE.BRANCH] = bva
     return targets
 
 
