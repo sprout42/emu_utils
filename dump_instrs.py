@@ -294,7 +294,10 @@ class BLOCK_LIST:
         # Remove the last block (it should be empty) or just be garbage data
         if len(self.blocks[-1]) != 0:
             # All of the lines in this block should be data with no instruction
-            assert all(l.op is None for l in self.blocks[-1])
+            if not all(l.op is None for l in self.blocks[-1]):
+                for line in self.blocks[-1]:
+                    print(line)
+                raise Exception
 
         self.blocks.pop()
 
@@ -328,8 +331,11 @@ class BLOCK_LIST:
         self.num_left_cols = max_backwards_col
         self.columns = range(-self.num_left_cols, self.num_right_cols)
 
-        # And ensure that all blocks have been correctly allocated a column
-        assert all(b.col is not None for b in self.blocks)
+        # And ensure that all blocks have been correctly allocated a column, if
+        # not then just place it in column 0
+        for block in self.blocks:
+            if block.col is None:
+                block.col = 0
 
     def add_link(self, src, addr, dest):
         if isinstance(src, BLOCK):
@@ -439,36 +445,41 @@ class BLOCK_LIST:
                         link.col = -1
 
 
-def decode_lines(in_file, va=0, arch=None, vle=False):
+def decode_lines(in_file, va=0, arch=None, vle=False, offset=0, size=None):
     _, emu = vwopen(arch)
 
     with open(in_file, 'rb') as f:
-        firmware = f.read()
-        offset = 0
-        while offset < len(firmware):
+        f.seek(offset)
+        if end is None:
+            firmware = f.read()
+        else:
+            firmware = f.read(size)
+
+        file_offset = 0
+        while file_offset < len(firmware):
             try:
-                if firmware[offset:offset+4] == b'\xff\xff\xff\xff':
+                if firmware[file_offset:file_offset+4] == b'\xff\xff\xff\xff':
                     raise Exception()
-                op = decode(emu, firmware, vle, offset=offset, va=va+offset, verbose=False)
-                size = op.size
+                op = decode(emu, firmware, vle, offset=file_offset, va=va+file_offset, verbose=False)
+                incr = op.size
             except:
                 op = None
-                size = 2 if vle else 4
+                incr = 2 if vle else 4
 
-            data = firmware[offset:offset+size]
-            yield LINE(va+offset, data, op)
+            data = firmware[file_offset:file_offset+incr]
+            yield LINE(va+file_offset, data, op)
 
-            offset += size
+            file_offset += incr
 
 
-def decode_blocks(in_file, va=0, arch=None, vle=False):
+def decode_blocks(in_file, va=0, arch=None, vle=False, offset=0, size=None):
     # A Block is a tuple of (lines, next_blocks).  None in place of the next
     # block list indicates
     idx = 0
     blocks = BLOCK_LIST()
     blocks.add(BLOCK(idx))
 
-    lines = list(decode_lines(in_file, va=va, arch=arch, vle=vle))
+    lines = list(decode_lines(in_file, va=va, arch=arch, vle=vle, offset=offset, size=size))
     while lines:
         line = lines.pop(0)
         tgts = get_op_targets(line.op)
@@ -575,7 +586,7 @@ def draw_src_links(columns, block):
     line += ''.join(_right_link if l else _right_pad for l in \
             (l for c, l in src_cols.items() if c >= 0))
 
-    return line
+    return line.rstrip()
 
 
 def draw_transition_links(columns, block):
@@ -628,7 +639,7 @@ def draw_transition_links(columns, block):
         off = (len(_right_link) * col) + connect_offset
         right = right[:off] + '+' + right[off+1:]
 
-    return left + right
+    return (left + right).rstrip()
 
 
 def draw_dest_links(columns, block):
@@ -649,10 +660,10 @@ def draw_dest_links(columns, block):
             else:
                 line += _right_pad
 
-    return line
+    return line.rstrip()
 
 
-def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False, print_block_headers=False):
+def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False, print_block_headers=False, offset=0, size=None):
     if arch is None:
         arch = 'ppc32-embedded'
 
@@ -661,7 +672,7 @@ def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False,
     else:
         outfd = open(out_file, 'w')
 
-    blocks = decode_blocks(in_file, va=va, arch=arch, vle=vle)
+    blocks = decode_blocks(in_file, va=va, arch=arch, vle=vle, offset=offset, size=size)
 
     if fancy:
         global _right_link, _right_pad, _left_link, _left_pad
@@ -721,11 +732,18 @@ def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False,
                     # If this is the last line and there is a non-fallthrough
                     # link, draw it out now.
                     for link in block.links.values():
-                        if link.forwards and link.dest.idx > block.idx + 1 and link.col != block.col:
-                            start = comment_offset + len(line.comment)
-                            end = len(left) + (len(_right_link) * link.col) + right_connect_offset
-                            connect = ' ' + ('-' * (end - start - 1)) + '+'
-                            out = out[:start] + connect + out[end:]
+                        if link.forwards and link.dest.idx != block.idx + 1:
+                            if link.col > block.col:
+                                start = comment_offset + len(line.comment)
+                                col_width = link.col - block.col
+                                end = len(left) + (len(_right_link) * col_width) + right_connect_offset
+                                connect = ' ' + ('-' * (end - start - 1)) + '+'
+                                out = out[:start] + connect + out[end+1:]
+                            elif link.col < block.col:
+                                start = max_left_width + (len(_right_link) * link.col) + right_connect_offset
+                                end = len(left)
+                                connect = '+' + ('-' * (end - start - 1))
+                                out = out[:start] + connect + out[end:]
                         elif link.backwards:
                             end = max_left_width + (len(_right_link) * (block.col))
                             start = max_left_width - (len(_left_link) * abs(link.col)) + left_connect_offset
@@ -772,14 +790,23 @@ def main():
     parser.add_argument('-v', '--vle', action='store_true', help='Decode instructions as VLE')
     parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=ppc_arch_list)
     parser.add_argument('-b', '--baseaddr', default='0x00000000')
+    parser.add_argument('-o', '--offset', default='0x00000000')
+    parser.add_argument('-s', '--size', nargs='?', const=None)
     parser.add_argument('-f', '--fancy', action='store_true')
     parser.add_argument('-B', '--print-block-headers', action='store_true')
     args = parser.parse_args()
 
     va = int(args.baseaddr, 0)
+    offset = int(args.offset, 0)
+
+    if args.size is not None:
+        size = int(args.size, 0)
+    else:
+        size = None
 
     decode_file(args.filename, va=va, arch=args.arch, vle=args.vle,
-            fancy=args.fancy, print_block_headers=args.print_block_headers)
+                fancy=args.fancy, print_block_headers=args.print_block_headers,
+                offset=offset, size=size)
 
 if __name__ == '__main__':
     main()

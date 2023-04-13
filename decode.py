@@ -141,15 +141,14 @@ def find_category(emu, arg, op):
             pass
 
 
-def vwopen(arch=None):
+def vwopen(arch=None, endian=envi.const.ENDIAN_LSB):
     vw = vivisect.VivWorkspace()
 
     # Copied from vivisect/parsers/blob.py
     vw.setMeta('Architecture', arch)
     vw.setMeta('Platform', 'unknown')
     vw.setMeta('Format', 'blob')
-    vw.setMeta('bigend', envi.const.ENDIAN_MSB)
-    vw.setMeta('DefaultCall', vivisect.const.archcalls.get(arch, 'unknown'))
+    vw.setMeta('bigend', endian)
 
     emu = vw.getEmulator()
 
@@ -157,19 +156,20 @@ def vwopen(arch=None):
 
 
 def main():
-    ppc_arch_list = [n for n in envi.arch_names.values() if n.startswith('ppc')]
+    arch_list = list(envi.getArchNames().values())
 
     parser = argparse.ArgumentParser()
     parser.add_argument('bytes', nargs='+', help='Bytes to decode')
     parser.add_argument('-v', '--vle', action='store_true', help='Decode instructions as VLE')
-    parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=ppc_arch_list)
+    parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=arch_list)
+    parser.add_argument('-e', '--endian', type=int, default=1, choices=[0, 1])
     parser.add_argument('-q', '--quiet', action='store_true', help='supress all extra decode information')
     parser.add_argument('-b', '--baseaddr', type=str, default='0x00000000')
     args = parser.parse_args()
 
     va = int(args.baseaddr, 0)
 
-    vw, emu = vwopen(args.arch)
+    vw, emu = vwopen(args.arch, args.endian)
     print('\n----------------------\n%s workspace opened\n----------------------\n' % args.arch)
     for arg in args.bytes:
         op = decode(emu, arg, args.vle, va=va)

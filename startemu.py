@@ -14,7 +14,7 @@ def start(arch=None, endian=envi.const.ENDIAN_LSB, firmware=None, baseaddr=0, en
     vw.setMeta('Architecture', arch)
     vw.setMeta('Platform', 'unknown')
     vw.setMeta('Format', 'blob')
-    vw.setMeta('bigend', envi.const.ENDIAN_MSB)
+    vw.setMeta('bigend', endian)
     print('workspace arch set to %s' % arch)
 
     # if a firmware file is specified load it
@@ -34,9 +34,9 @@ def start(arch=None, endian=envi.const.ENDIAN_LSB, firmware=None, baseaddr=0, en
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    arch_list = list(envi.arch_names.values())
+    arch_list = list(envi.getArchNames().values())
     parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=arch_list)
-    parser.add_argument('-e', '--endian', type=int, default=0, choices=[0, 1])
+    parser.add_argument('-e', '--endian', type=int, default=1, choices=[0, 1])
     parser.add_argument('-f', '--firmware')
     parser.add_argument('-b', '--baseaddr', default='0')
     parser.add_argument('-E', '--entrypoint')
