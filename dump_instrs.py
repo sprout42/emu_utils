@@ -450,7 +450,7 @@ def decode_lines(in_file, va=0, arch=None, vle=False, offset=0, size=None):
 
     with open(in_file, 'rb') as f:
         f.seek(offset)
-        if end is None:
+        if size is None:
             firmware = f.read()
         else:
             firmware = f.read(size)
@@ -663,6 +663,113 @@ def draw_dest_links(columns, block):
     return line.rstrip()
 
 
+def _fancy_decode(in_file, outfd, va, arch, vle, offset, size, print_block_headers):
+    blocks = decode_blocks(in_file, va=va, arch=arch, vle=vle, offset=offset, size=size)
+    global _right_link, _right_pad, _left_link, _left_pad
+    _right_link = ' |' + (' ' * (blocks.col_width-2))
+    _right_pad = ' ' * blocks.col_width
+
+    _left_link = '  ‖  '
+    _left_pad = ' ' * len(_left_link)
+
+    right_connect_offset = _right_link.index('|')
+    left_connect_offset = _left_link.index('‖')
+    max_left_width = len(_left_link) * blocks.num_left_cols
+
+    for block in blocks:
+        columns = blocks.get_columns(block)
+
+        # Get the link targets for this block
+        targets = list(block.links.values())
+
+        # create any link strings for the last line in the block
+
+        left, right = draw_links(columns, block)
+
+        # If there is a reverse link that ends at this block, calculate the
+        # start and end of the connecting line.
+        left_connect = ''
+        for col in range(-blocks.num_left_cols, 0):
+            links = columns[col]
+            if any(l.dest.idx == block.idx for l in links):
+                left_start = max_left_width - (len(_left_link) * abs(col)) + left_connect_offset
+                left_end = max_left_width + (len(_right_link) * (block.col))
+                left_connect = '+' + ('-' * (left_end - left_start - 2)) + '>'
+
+        if print_block_headers:
+            block_str = '%s %d: %s' % (block, block.col, ', '.join('%d[%d]' % (l.col, l.dest.idx) if l.dest else 'None' for l in block.links.values()))
+            line_pad = ' ' * (blocks.col_width - len(block_str))
+            out = (left + block_str + line_pad + right).rstrip()
+
+            # If the header is being printed and there is a left column
+            # connection, add that in now
+            if left_connect:
+                out = out[:left_start] + left_connect + out[left_end:]
+
+            print(out, file=outfd)
+
+    for line in block:
+        line_pad = ' ' * (blocks.col_width - line.width)
+        out = left + str(line)
+        comment_offset = len(out)
+        out = (out + line_pad + right).rstrip()
+
+        out = out[:comment_offset] + line.comment + out[comment_offset+len(line.comment):]
+
+        if line == block[-1]:
+            # If this is the last line and there is a non-fallthrough
+            # link, draw it out now.
+            for link in block.links.values():
+                if link.forwards and link.dest.idx != block.idx + 1:
+                    if link.col > block.col:
+                        start = comment_offset + len(line.comment)
+                        col_width = link.col - block.col
+                        end = len(left) + (len(_right_link) * col_width) + right_connect_offset
+                        connect = ' ' + ('-' * (end - start - 1)) + '+'
+                        out = out[:start] + connect + out[end+1:]
+                    elif link.col < block.col:
+                        start = max_left_width + (len(_right_link) * link.col) + right_connect_offset
+                        end = len(left)
+                        connect = '+' + ('-' * (end - start - 1))
+                        out = out[:start] + connect + out[end:]
+                elif link.backwards:
+                    end = max_left_width + (len(_right_link) * (block.col))
+                    start = max_left_width - (len(_left_link) * abs(link.col)) + left_connect_offset
+                    connect = '+' + ('-' * (end - start - 1))
+                    out = out[:start] + connect + out[end:]
+        elif line == block[0] and not print_block_headers and left_connect:
+            # If this is the first line in a block and the block header
+            # isn't printed and there is a reverse link that ends at
+            # this block, add the connecting link.
+            out = out[:left_start] + left_connect + out[left_end:]
+
+        print(out, file=outfd)
+
+    # Print the between block lines, unless this is the last block of the
+    # procedure or the last block of a backwards link
+    if block is not blocks.blocks[-1]:
+        # Now draw some src to dest links and move the src links into
+        # the dest column
+        out_lines = [
+            draw_src_links(columns, block),
+            draw_transition_links(columns, block),
+            draw_dest_links(columns, block),
+        ]
+
+        for out in out_lines:
+            if out is not None:
+                print(out, file=outfd)
+
+
+def _basic_decode(in_file, outfd, va, arch, vle, offset, size):
+    for line in decode_lines(in_file=in_file, va=va, arch=arch, vle=vle, offset=offset, size=size):
+        out = str(line)
+        if line.comment:
+            comment_offset = len(out)
+            out = out[:comment_offset] + line.comment + out[comment_offset+len(line.comment):]
+        print(out, file=outfd)
+
+
 def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False, print_block_headers=False, offset=0, size=None):
     if arch is None:
         arch = 'ppc32-embedded'
@@ -672,132 +779,41 @@ def decode_file(in_file, out_file=None, va=0, arch=None, vle=False, fancy=False,
     else:
         outfd = open(out_file, 'w')
 
-    blocks = decode_blocks(in_file, va=va, arch=arch, vle=vle, offset=offset, size=size)
-
     if fancy:
-        global _right_link, _right_pad, _left_link, _left_pad
-        _right_link = ' |' + (' ' * (blocks.col_width-2))
-        _right_pad = ' ' * blocks.col_width
-
-        _left_link = '  ‖  '
-        _left_pad = ' ' * len(_left_link)
-
-        right_connect_offset = _right_link.index('|')
-        left_connect_offset = _left_link.index('‖')
-        max_left_width = len(_left_link) * blocks.num_left_cols
-
-    for block in blocks:
-        if fancy:
-            columns = blocks.get_columns(block)
-
-            # Get the link targets for this block
-            targets = list(block.links.values())
-
-            # create any link strings for the last line in the block
-
-            left, right = draw_links(columns, block)
-
-            # If there is a reverse link that ends at this block, calculate the
-            # start and end of the connecting line.
-            left_connect = ''
-            for col in range(-blocks.num_left_cols, 0):
-                links = columns[col]
-                if any(l.dest.idx == block.idx for l in links):
-                    left_start = max_left_width - (len(_left_link) * abs(col)) + left_connect_offset
-                    left_end = max_left_width + (len(_right_link) * (block.col))
-                    left_connect = '+' + ('-' * (left_end - left_start - 2)) + '>'
-
-            if print_block_headers:
-                block_str = '%s %d: %s' % (block, block.col, ', '.join('%d[%d]' % (l.col, l.dest.idx) if l.dest else 'None' for l in block.links.values()))
-                line_pad = ' ' * (blocks.col_width - len(block_str))
-                out = (left + block_str + line_pad + right).rstrip()
-
-                # If the header is being printed and there is a left column
-                # connection, add that in now
-                if left_connect:
-                    out = out[:left_start] + left_connect + out[left_end:]
-
-                print(out, file=outfd)
-
-        for line in block:
-            if fancy:
-                line_pad = ' ' * (blocks.col_width - line.width)
-                out = left + str(line)
-                comment_offset = len(out)
-                out = (out + line_pad + right).rstrip()
-
-                out = out[:comment_offset] + line.comment + out[comment_offset+len(line.comment):]
-
-                if line == block[-1]:
-                    # If this is the last line and there is a non-fallthrough
-                    # link, draw it out now.
-                    for link in block.links.values():
-                        if link.forwards and link.dest.idx != block.idx + 1:
-                            if link.col > block.col:
-                                start = comment_offset + len(line.comment)
-                                col_width = link.col - block.col
-                                end = len(left) + (len(_right_link) * col_width) + right_connect_offset
-                                connect = ' ' + ('-' * (end - start - 1)) + '+'
-                                out = out[:start] + connect + out[end+1:]
-                            elif link.col < block.col:
-                                start = max_left_width + (len(_right_link) * link.col) + right_connect_offset
-                                end = len(left)
-                                connect = '+' + ('-' * (end - start - 1))
-                                out = out[:start] + connect + out[end:]
-                        elif link.backwards:
-                            end = max_left_width + (len(_right_link) * (block.col))
-                            start = max_left_width - (len(_left_link) * abs(link.col)) + left_connect_offset
-                            connect = '+' + ('-' * (end - start - 1))
-                            out = out[:start] + connect + out[end:]
-                elif line == block[0] and not print_block_headers and left_connect:
-                    # If this is the first line in a block and the block header
-                    # isn't printed and there is a reverse link that ends at
-                    # this block, add the connecting link.
-                    out = out[:left_start] + left_connect + out[left_end:]
-
-            else:
-                out = str(line)
-                if line.comment:
-                    comment_offset = len(out)
-                    out = out[:comment_offset] + line.comment + out[comment_offset+len(line.comment):]
-
-            print(out, file=outfd)
-
-        # Print the between block lines, unless this is the last block of the
-        # procedure or the last block of a backwards link
-        if fancy and block is not blocks.blocks[-1]:
-            # Now draw some src to dest links and move the src links into
-            # the dest column
-            out_lines = [
-                draw_src_links(columns, block),
-                draw_transition_links(columns, block),
-                draw_dest_links(columns, block),
-            ]
-
-            for out in out_lines:
-                if out is not None:
-                    print(out, file=outfd)
+        _fancy_decode(in_file=in_file, outfd=outfd, va=va, arch=arch, vle=vle, offset=offset, size=size, print_block_headers=print_block_headers)
+    else:
+        _basic_decode(in_file=in_file, outfd=outfd, va=va, arch=arch, vle=vle, offset=offset, size=size)
 
     if outfd != sys.stdout:
         outfd.close()
 
 
 def main():
-    ppc_arch_list = [n for n in envi.arch_names.values() if n.startswith('ppc')]
+    ppc_arch_list = [n for n in envi.getArchNames().values() if n.startswith('ppc')]
 
     parser = argparse.ArgumentParser()
     parser.add_argument('filename', help='file to dump instructions from')
     parser.add_argument('-v', '--vle', action='store_true', help='Decode instructions as VLE')
     parser.add_argument('-a', '--arch', default='ppc32-embedded', choices=ppc_arch_list)
-    parser.add_argument('-b', '--baseaddr', default='0x00000000')
-    parser.add_argument('-o', '--offset', default='0x00000000')
+    parser.add_argument('-b', '--baseaddr')
+    parser.add_argument('-o', '--offset')
     parser.add_argument('-s', '--size', nargs='?', const=None)
     parser.add_argument('-f', '--fancy', action='store_true')
     parser.add_argument('-B', '--print-block-headers', action='store_true')
     args = parser.parse_args()
 
-    va = int(args.baseaddr, 0)
-    offset = int(args.offset, 0)
+    if args.baseaddr is None and args.offset is None:
+        va = 0
+        offset = 0
+    elif args.baseaddr is None:
+        offset = int(args.offset, 0)
+        va = offset
+    elif args.offset is None:
+        va = int(args.baseaddr, 0)
+        offset = 0
+    else:
+        offset = int(args.offset, 0)
+        va = int(args.baseaddr, 0) + offset
 
     if args.size is not None:
         size = int(args.size, 0)
